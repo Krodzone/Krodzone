@@ -754,7 +754,7 @@ namespace Krodzone
             return PropertyIndexerAttribute.ToValueArray<T>(this);
         }
         
-        public virtual ValidationResultArgs ValidateCreatedBy(IValidationValue value)
+        public virtual ValidationResultArgs ValidateCreatedBy(IRequiredPropertyAttribute attribute)
         {
             if (string.IsNullOrEmpty(this.CreatedBy))
             {
@@ -763,7 +763,7 @@ namespace Krodzone
             return ValidationResultArgs.Successful;
         }
 
-        public virtual ValidationResultArgs ValidateCreatedDate(IValidationValue value)
+        public virtual ValidationResultArgs ValidateCreatedDate(IRequiredPropertyAttribute attribute)
         {
             if (this.CreatedDate.Year <= 1900)
             {
@@ -772,7 +772,7 @@ namespace Krodzone
             return ValidationResultArgs.Successful;
         }
 
-        public virtual ValidationResultArgs ValidateUpdatedBy(IValidationValue value)
+        public virtual ValidationResultArgs ValidateUpdatedBy(IRequiredPropertyAttribute attribute)
         {
             if (string.IsNullOrEmpty(this.UpdatedBy))
             {
@@ -781,7 +781,7 @@ namespace Krodzone
             return ValidationResultArgs.Successful;
         }
 
-        public virtual ValidationResultArgs ValidateDateUpdated(IValidationValue value)
+        public virtual ValidationResultArgs ValidateDateUpdated(IRequiredPropertyAttribute attribute)
         {
             if (this.DateUpdated.Year < 1900)
             {
@@ -805,7 +805,7 @@ namespace Krodzone
                     {
                         if (attribute.ValidationMethod != null)
                         {
-                            if (((ValidationResultArgs)attribute.ValidationMethod.Invoke(this, new object[] { attribute.ValidationValue })) != ValidationResultArgs.Successful)
+                            if (((ValidationResultArgs)attribute.ValidationMethod.Invoke(this, new object[] { attribute })) != ValidationResultArgs.Successful)
                             {
                                 isValid = false;
                                 builder.Append(attribute.InvalidValueMessage + "\r\n");
