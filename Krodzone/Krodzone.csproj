@@ -49,6 +49,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Attributes\DatabaseAttributes.cs" />
+    <Compile Include="Attributes\PropertyIndexerAttribute.cs" />
     <Compile Include="Validation\DataValidation.cs" />
     <Compile Include="Krodzone.cs" />
     <Compile Include="Data\DataCallObjects.cs" />

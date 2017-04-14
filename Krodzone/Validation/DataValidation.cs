@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Configuration;
+using System.Reflection;
 
 namespace Krodzone.Validation
 {
@@ -158,8 +159,52 @@ namespace Krodzone.Validation
     /// <summary>
     /// 
     /// </summary>
+    public interface IObjectValidationMessage
+    {
+
+        #region Properties
+        bool IsValid { get; }
+        string Message { get; }
+        #endregion
+
+    }
+
+    public class ObjectValidationMessage : IObjectValidationMessage
+    {
+
+        #region Local Variables
+        protected readonly bool _IsValid;
+        protected readonly string _Message;
+        #endregion
+
+        #region Constructor
+        public ObjectValidationMessage(bool isValid, string message)
+        {
+            this._IsValid = isValid;
+            this._Message = message;
+        }
+        #endregion
+
+        #region Properties
+        public bool IsValid
+        {
+            get { return _IsValid; }
+        }
+
+
+        public string Message
+        {
+            get { return _Message; }
+        }
+        #endregion
+
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
     [SqlTable("dbo", "DataValidationConfigSetting", "DefaultConnection")]
-    public class DataValidationConfigSetting : ObjectAuditBase<string>, IDataValidationConfigSetting
+    public class DataValidationConfigSetting : ObjectAuditBase<DataValidationConfigSetting>, IDataValidationConfigSetting
     {
         
         #region Properties
@@ -235,9 +280,9 @@ namespace Krodzone.Validation
         /// 
         /// </summary>
         /// <returns></returns>
-        public object[] ToArray()
+        public override object[] ToArray()
         {
-            return new object[] { DataValidationConfigSettingID, ApplicationName, ObjectName, PropertyName, LogicalComparisonGroup, (int)ComparisonType, EvaluationType, DataType, DirectValue, MinValue, MaxValue, IsActive, CreatedBy, CreatedDate, UpdatedBy, UpdatedDate };
+            return new object[] { DataValidationConfigSettingID, ApplicationName, ObjectName, PropertyName, LogicalComparisonGroup, (int)ComparisonType, EvaluationType, DataType, DirectValue, MinValue, MaxValue, IsActive, CreatedBy, CreatedDate, UpdatedBy, DateUpdated };
         }
         #endregion
 
@@ -275,6 +320,18 @@ namespace Krodzone.Validation
 
             return obj;
 
+        }
+        #endregion
+
+        #region Public Methods
+        public override bool Save(IDataSetting setting)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override bool Delete(IDataSetting setting)
+        {
+            throw new NotImplementedException();
         }
         #endregion
 
@@ -1652,6 +1709,75 @@ namespace Krodzone.Validation
 
         }
         #endregion
+
+    }
+
+    namespace Attributes
+    {
+
+
+        public interface IRequiredPropertyAttribute
+        {
+
+            #region Properties
+            string AllowedValue { get; set; }
+            object CurrentValue { get; set; }
+            DataTypeArgs DataType { get; }
+            EvaluationTypeArgs EvaluationType { get; }
+            string InvalidValueMessage { get; set; }
+            string MaxValue { get; set; }
+            string MinValue { get; set; }
+            string NegatedValue { get; set; }
+            string PropertyName { get; set; }
+            MethodInfo ValidationMethod { get; set; }
+            string ValidationMethodName { get; set; }
+            string ValidationPattern { get; set; }
+            IValidationValue ValidationValue { get; set; }
+            #endregion
+
+        }
+
+
+        [AttributeUsage(AttributeTargets.Property)]
+        public class RequiredPropertyAttribute : Attribute, IRequiredPropertyAttribute
+        {
+
+            #region Local Variables
+            protected readonly DataTypeArgs _DataType;
+            protected readonly EvaluationTypeArgs _EvaluationType = EvaluationTypeArgs.Negation;
+            #endregion
+
+            #region  Constructor
+            public RequiredPropertyAttribute(DataTypeArgs dataType, EvaluationTypeArgs evaluationType)
+            {
+                this._DataType = dataType;
+                this._EvaluationType = evaluationType;
+            }
+            #endregion
+
+            #region Properties
+            public string AllowedValue { get; set; }
+            public object CurrentValue { get; set; }
+            public DataTypeArgs DataType
+            {
+                get { return this._DataType; }
+            }
+            public EvaluationTypeArgs EvaluationType
+            {
+                get { return this._EvaluationType; }
+            }
+            public string InvalidValueMessage { get; set; }
+            public string MaxValue { get; set; }
+            public string MinValue { get; set; }
+            public string NegatedValue { get; set; }
+            public string PropertyName { get; set; }
+            public MethodInfo ValidationMethod { get; set; }
+            public string ValidationMethodName { get; set; }
+            public string ValidationPattern { get; set; }
+            public IValidationValue ValidationValue { get; set; }
+            #endregion
+
+        }
 
     }
 
