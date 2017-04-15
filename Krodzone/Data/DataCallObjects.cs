@@ -2057,7 +2057,7 @@ namespace Krodzone.Data
                             //  For Backwards Compatibility
                             obj = (obj == null ? Krodzone.CreateObject<T>(row) : obj);
 
-                            if (obj == null)
+                            if (obj != null)
                             {
                                 result.Items.Add(obj);
                             }

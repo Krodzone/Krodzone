@@ -1046,6 +1046,10 @@ namespace Krodzone
 
                     case "TimeSpan":
                         return this.GetTimeSpan(property);
+
+                    case "String":
+                        return GetString(property);
+
                 }
                 return null;
             }
@@ -1137,6 +1141,20 @@ namespace Krodzone
             {
                 return new TimeSpan(0, 0, 0);
             }
+        }
+
+        private string GetString(PropertyInfo property)
+        {
+
+            try
+            {
+                return (string)property.GetValue(this);
+            }
+            catch
+            {
+                return "";
+            }
+
         }
         #endregion
 
@@ -1240,7 +1258,7 @@ namespace Krodzone
         #endregion
 
         #region Nested Objects
-        internal interface IDataObjectController
+        public interface IDataObjectController
         {
 
             #region Methods
@@ -1254,7 +1272,7 @@ namespace Krodzone
 
         }
 
-        internal class ObjectController
+        public class ObjectController
         {
 
             #region Local Variables
@@ -1271,7 +1289,7 @@ namespace Krodzone
             #endregion
 
             #region Nested Objects
-            internal class DataObjectController : IDataObjectController
+            public class DataObjectController : IDataObjectController
             {
 
                 #region Local Variables
