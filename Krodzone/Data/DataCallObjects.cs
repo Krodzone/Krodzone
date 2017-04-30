@@ -365,7 +365,8 @@ namespace Krodzone.Data
                 {
                     ParameterName = OutputParamNames[i],
                     SqlDbType = OutputParamTypes[i],
-                    Direction = ParameterDirection.Output
+                    Direction = ParameterDirection.Output,
+                    Size = ParameterSize(this.OutputParamTypes[i])
                 };
 
                 parameters.Add(param);
@@ -373,6 +374,30 @@ namespace Krodzone.Data
             }
 
             return parameters.ToArray();
+
+        }
+        #endregion
+
+        #region Protected Methods
+        protected virtual int ParameterSize(SqlDbType param)
+        {
+
+            if (param == SqlDbType.NChar || param == SqlDbType.NVarChar)
+            {
+                return 4000;
+            }
+
+            if (param == SqlDbType.Char)
+            {
+                return 8000;
+            }
+
+            if (param == SqlDbType.VarBinary || param == SqlDbType.VarChar)
+            {
+                return -1;
+            }
+
+            return 0;
 
         }
         #endregion

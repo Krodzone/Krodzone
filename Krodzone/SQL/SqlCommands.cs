@@ -649,34 +649,47 @@ namespace Krodzone.SQL
         {
             StringBuilder sb = new StringBuilder();
 
-            if (SqlTable != null)
+            if (this.SqlTable != null)
             {
-                sb.Append(
-                    $"if EXISTS(SELECT * FROM sys.sysobjects WHERE id = OBJECT_ID(N'{SqlTable.Schema}.SaveEntry_{SqlTable.Tablename}') AND xtype IN ('P','PC'))");
+                bool hasIdentityCol = false;
+                string identityColumn = string.Empty;
+
+                sb.Append(string.Format("if EXISTS(SELECT * FROM sys.sysobjects WHERE id = OBJECT_ID(N'{0}.SaveEntry_{1}') AND xtype IN ('P','PC'))", this.SqlTable.Schema, this.SqlTable.Tablename));
                 sb.Append("\r\n\tBEGIN");
-                sb.Append($"\r\n\t\tDROP PROCEDURE {SqlTable.Schema}.SaveEntry_{SqlTable.Tablename};");
+                sb.Append(string.Format("\r\n\t\tDROP PROCEDURE {0}.SaveEntry_{1};", this.SqlTable.Schema, this.SqlTable.Tablename));
                 sb.Append("\r\n\tEND");
                 sb.Append("\r\nGO");
 
-                sb.Append($"\r\n\r\nCREATE PROCEDURE {SqlTable.Schema}.SaveEntry_{SqlTable.Tablename}(");
+                sb.Append(string.Format("\r\n\r\nCREATE PROCEDURE {0}.SaveEntry_{1}(", this.SqlTable.Schema, this.SqlTable.Tablename));
                 sb.Append("\r\n");
 
-                List<ISqlTableColumnAttribute> pkeys = (from pk in SqlTable.Columns where pk.PrimaryKey select pk).ToList();
-                List<ISqlTableColumnAttribute> nokeys = (from nk in SqlTable.Columns where nk.PrimaryKey == false select nk).ToList();
+                List<ISqlTableColumnAttribute> pkeys = (from pk in this.SqlTable.Columns where pk.PrimaryKey == true select pk).ToList();
+                List<ISqlTableColumnAttribute> nokeys = (from nk in this.SqlTable.Columns where nk.PrimaryKey == false select nk).ToList();
 
                 if (pkeys.Count > 0)
                 {
 
-                    for (int i = 0; i < SqlTable.Columns.Count; i++)
+                    for (int i = 0; i < this.SqlTable.Columns.Count; i++)
                     {
-                        sb.Append(
-                            $"\r\n{SqlTable.Columns[i].GetStoredProcedureParameter()}{(i == SqlTable.Columns.Count - 1 ? "" : ",")}");
+
+                        if (!hasIdentityCol && this.SqlTable.Columns[i].Identity)
+                        {
+                            hasIdentityCol = true;
+                            identityColumn = string.Format("@{0}", this.SqlTable.Columns[i].ColumnName);
+                        }
+
+                        sb.Append(string.Format("\r\n{0}{1}", this.SqlTable.Columns[i].GetStoredProcedureParameter(), (i == this.SqlTable.Columns.Count - 1 ? "" : ",")));
+                    }
+
+                    if (hasIdentityCol)
+                    {
+                        sb.Append(",\r\n@@OutputID int OUTPUT");
                     }
 
                     sb.Append("\r\n\r\n)");
                     sb.Append("\r\n\r\nAS");
                     sb.Append("\r\n\r\nBEGIN");
-                    sb.Append($"\r\n\r\n\tif EXISTS(SELECT * FROM {SqlTable.GetFormattedTableName()}");
+                    sb.Append(string.Format("\r\n\r\n\tif EXISTS(SELECT * FROM {0}", this.SqlTable.GetFormattedTableName()));
 
                     for (int i = 0; i < pkeys.Count; i++)
                     {
@@ -685,7 +698,7 @@ namespace Krodzone.SQL
 
                     sb.Append(")");
                     sb.Append("\r\n\t\tBEGIN");
-                    sb.Append($"\r\n\t\t\tUPDATE {SqlTable.GetFormattedTableName()}");
+                    sb.Append(string.Format("\r\n\t\t\tUPDATE {0}", this.SqlTable.GetFormattedTableName()));
                     sb.Append("\r\n\t\t\tSET");
 
                     for (int i = 0; i < nokeys.Count; i++)
@@ -699,34 +712,52 @@ namespace Krodzone.SQL
                     }
 
                     sb.Append(";");
+
+                    if (hasIdentityCol)
+                    {
+                        sb.Append(string.Format("\r\n\r\n\t\t\tSELECT @@OutputID = {0}", identityColumn));
+                    }
+
                     sb.Append("\r\n\t\tEND");
 
                     sb.Append("\r\n\telse");
                     sb.Append("\r\n\t\tBEGIN");
-                    sb.Append($"\r\n\t\t\tINSERT INTO {SqlTable.GetFormattedTableName()} (");
+                    sb.Append(string.Format("\r\n\t\t\tINSERT INTO {0} (", this.SqlTable.GetFormattedTableName()));
 
                     int cnt = 0;
 
-                    foreach (var sqlTableColumnAttribute in SqlTable.Columns)
+                    foreach (SqlTableColumnAttribute col in this.SqlTable.Columns)
                     {
-                        var col = (SqlTableColumnAttribute) sqlTableColumnAttribute;
-                        if (col.Identity) continue;
-                        sb.Append($"{(cnt == 0 ? "" : ", ")}{col.ColumnName}");
-                        cnt++;
+                        if (!col.Identity)
+                        {
+                            sb.Append(string.Format("{0}{1}", (cnt == 0 ? "" : ", "), col.ColumnName));
+                            cnt++;
+                        }
                     }
 
                     cnt = 0;
                     sb.Append(")\r\n\t\t\tVALUES(");
 
-                    foreach (var sqlTableColumnAttribute in SqlTable.Columns)
+                    foreach (SqlTableColumnAttribute col in this.SqlTable.Columns)
                     {
-                        var col = (SqlTableColumnAttribute) sqlTableColumnAttribute;
-                        if (col.Identity) continue;
-                        sb.Append($"{(cnt == 0 ? "" : ", ")}@{col.ColumnName}");
-                        cnt++;
+                        if (!col.Identity)
+                        {
+                            sb.Append(string.Format("{0}@{1}", (cnt == 0 ? "" : ", "), col.ColumnName));
+                            cnt++;
+                        }
                     }
 
-                    sb.Append(");\r\n\t\tEND");
+
+                    if (hasIdentityCol)
+                    {
+                        sb.Append(");\r\n\r\n\t\t\tSELECT @@OutputID = SCOPE_IDENTITY()\r\n\t\tEND");
+                    }
+                    else
+                    {
+                        sb.Append(");\r\n\t\tEND");
+                    }
+
+
 
                     sb.Append("\r\nEND");
                     sb.Append("\r\nGO\r\n\r\n");
@@ -747,7 +778,7 @@ namespace Krodzone.SQL
 
         }
         #endregion
-        
+
     }
 
     /// <summary>
