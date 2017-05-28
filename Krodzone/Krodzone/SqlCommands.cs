@@ -1,0 +1,949 @@
+﻿/*
+ * The Krodzone assembly provides a number of classes for making database object creation
+ * easier, and for making database connections easier. It also classes for handling binary 
+ * and XML serialization.
+ * 
+ * Copyright (C) 2005  Krodzone Technologies, LLC.
+ * 
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * 
+ */
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Krodzone.Attributes;
+using Krodzone.Data;
+
+namespace Krodzone.SQL
+{
+
+    /// <summary>
+    /// Used for specifying sort order
+    /// </summary>
+    public enum SqlSortOrderArgs
+    {
+        /// <summary>
+        /// Indicates that the column should be sorted Ascending
+        /// </summary>
+        Ascending = 0,
+        /// <summary>
+        /// Indicates that the column should be sorted Descending
+        /// </summary>
+        Descending = 1
+    }
+
+    /// <summary>
+    /// Base interface used for creating SQL commands
+    /// </summary>
+    public interface ISqlObjectCommand<T> : ICommand<T>, IDisposable
+    {
+
+        #region Properties
+        /// <summary>
+        /// Gets the connection string to use when connecting to the database
+        /// </summary>
+        string ConnectionString { get; set; }
+        /// <summary>
+        /// Gets the server used in the connection
+        /// </summary>
+        string Server { get; }
+        /// <summary>
+        /// Gets the database used in the connection
+        /// </summary>
+        string Database { get; }
+        /// <summary>
+        /// Gets the connection timeout used in the connection
+        /// </summary>
+        int ConnectionTimeout { get; }
+        /// <summary>
+        /// Gets the System.Data.SqlClient.SqlCredential used in the connection
+        /// </summary>
+        System.Data.SqlClient.SqlCredential Credential { get; }
+        #endregion
+
+    }
+
+    /// <summary>
+    /// Used for dynamically creating SQL Server tables
+    /// </summary>
+    public class SqlTableCommandString : ICommandString
+    {
+        
+        #region Local Variables
+        /// <summary>
+        /// Readonly ISqlTableAttribute instance member used for returning the command script
+        /// </summary>
+        protected readonly ISqlTableAttribute SqlTable;
+
+        private bool CreateAuditTable;
+        private bool CreateTriggers;
+        #endregion
+
+        #region Constructor
+        /// <summary>
+        /// Creates a new instance of the SqlTableCommandString class
+        /// </summary>
+        /// <param name="sqlTable">The ISqlTableAttribute used for creating the command script</param>
+        public SqlTableCommandString(ISqlTableAttribute sqlTable)
+        {
+            this.SqlTable = sqlTable;
+        }
+
+        /// <summary>
+        /// Creates a new instance of the SqlTableCommandString class
+        /// </summary>
+        /// <param name="sqlTable">The ISqlTableAttribute used for creating the command script</param>
+        /// <param name="createAuditTable">When true GetCommandString generates script to create an Audit schema, as well as an audit table for capturing data changes</param>
+        /// <param name="createTriggers">When true GetCommandString generates script to create triggers for saving changes into the audit table. createAuditTable must also be true.</param>
+        public SqlTableCommandString(ISqlTableAttribute sqlTable, bool createAuditTable, bool createTriggers)
+        {
+            this.SqlTable = sqlTable;
+            this.CreateAuditTable = createAuditTable;
+            this.CreateTriggers = createTriggers;
+        }
+        #endregion
+
+        #region Public Methods
+        /// <summary>
+        /// Returns a string containing the creation script for the schema, table, and all table indexes
+        /// </summary>
+        /// <returns></returns>
+        public virtual string GetCommandString()
+        {
+            StringBuilder sb = new StringBuilder();
+
+            if (this.SqlTable != null)
+            {
+                ISqlTableAttribute auditTable = null;
+
+                sb.Append(string.Format("IF NOT EXISTS(SELECT * FROM sys.schemas WHERE name = '{0}')\r\n", this.SqlTable.Schema));
+                sb.Append(string.Format("BEGIN\r\n\tEXEC('CREATE SCHEMA [{0}] AUTHORIZATION [dbo]');\r\nEND\r\nGO\r\n\r\n", this.SqlTable.Schema));
+
+                sb.Append(string.Format("CREATE TABLE {0}(", this.SqlTable.GetFormattedTableName()));
+
+                for (int i = 0; i < this.SqlTable.Columns.Count; i++)
+                {
+                    sb.Append(string.Format("\r\n\t{0}\t{1}", (i == 0 ? "" : ","), this.SqlTable.Columns[i].GetFormattedColumnName()));
+                }
+
+                List<ISqlTableColumnAttribute> pkeys = (from pk in this.SqlTable.Columns where pk.PrimaryKey == true select pk).ToList();
+
+                if (pkeys.Count() > 0)
+                {
+                    sb.Append(string.Format("\r\n\t,\tCONSTRAINT [PK_{0}] PRIMARY KEY CLUSTERED", this.SqlTable.Tablename));
+                    sb.Append("\r\n(");
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t{0}\t{1}", (i == 0 ? "" : ","), pkeys[i].ColumnName));
+                    }
+
+                    sb.Append("\r\n)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]");
+                    sb.Append("\r\n) ON [PRIMARY]");
+
+                }
+                else
+                {
+                    sb.Append("\r\n)");
+                }
+
+                sb.Append("\r\nGO\r\n\r\nSET ANSI_PADDING OFF\r\nGO");
+
+                foreach (var pky in this.SqlTable.TableIndexes)
+                {
+                    string indexName = (string)pky.Key;
+                    List<AbstractSqlIndexAttribute> indexCols = (from idx in (List<AbstractSqlIndexAttribute>)pky.Value orderby idx.OrderOfPrecedence select idx).ToList();
+
+                    sb.Append(string.Format("\r\n\r\nCREATE NONCLUSTERED INDEX [{0}] ON {1}", indexName, this.SqlTable.GetFormattedTableName()));
+                    sb.Append("\r\n(");
+
+                    for (int i = 0; i < indexCols.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t{0}\t{1}", (i == 0 ? "" : ","), indexCols[i].GetFormattedIndex()));
+                    }
+
+                    sb.Append("\r\n)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]");
+                    sb.Append("\r\nGO");
+
+                }
+
+                if (this.CreateAuditTable)
+                {
+                    auditTable = new SqlTableAttribute("Audit", this.SqlTable.Tablename, this.SqlTable.ConnectionStringSetting);
+
+                    ISqlTableColumnAttribute auditDate = new SqlTableColumnAttribute("AuditDate", System.Data.SqlDbType.DateTime, false);
+                    ISqlTableColumnAttribute triggerType = new SqlTableColumnAttribute("TriggerType", System.Data.SqlDbType.VarChar, false);
+
+                    auditDate.PrimaryKey = true;
+                    auditDate.Length = 0;
+
+                    triggerType.PrimaryKey = false;
+                    triggerType.Length = 1;
+
+
+                    auditTable.Columns.Add(auditDate);
+                    auditTable.Columns.Add(triggerType);
+
+                    foreach (ISqlTableColumnAttribute col in this.SqlTable.Columns)
+                    {
+                        ISqlTableColumnAttribute col2 = new SqlTableColumnAttribute(col.ColumnName, col.DataType, col.AllowNulls);
+
+                        col2.Identity = false;
+                        col2.Increment = col.Increment;
+                        col2.Length = col.Length;
+                        col2.Precision = col.Precision;
+                        col2.PrimaryKey = col.PrimaryKey;
+                        col2.Scale = col.Scale;
+                        col2.Seed = col.Seed;
+
+                        auditTable.Columns.Add(col2);
+                    }
+
+                    sb.Append("\r\n\r\n\r\n");
+                    sb.Append(this.CreateAuditTableScript(auditTable));
+
+                    //  Add trigger creation scripts
+                    sb.Append(this.CreateAfterInsertTrigger(auditTable));
+                    sb.Append(this.CreateAfterUpdateTrigger(auditTable));
+                    sb.Append(this.CreateAfterDeleteTrigger(auditTable));
+                    sb.Append(this.CreateBeforeAuditDeleteTrigger(auditTable));
+
+                }
+
+            }
+            else
+            {
+                throw new InvalidOperationException("The ISqlTableAttribute parameter passed in the constructor is invalid!");
+            }
+
+            return sb.ToString();
+
+        }
+        #endregion
+
+        #region Protected Methods
+        /// <summary>
+        /// Creates an audit table used for tracking data changes
+        /// </summary>
+        /// <param name="auditTable">The ISqlTableAttribute object used to create the audit table</param>
+        /// <returns></returns>
+        protected virtual string CreateAuditTableScript(ISqlTableAttribute auditTable)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            if (auditTable != null)
+            {
+                sb.Append(string.Format("IF NOT EXISTS(SELECT * FROM sys.schemas WHERE name = 'Audit')\r\n"));
+                sb.Append(string.Format("BEGIN\r\n\tEXEC('CREATE SCHEMA [Audit] AUTHORIZATION [dbo]');\r\nEND\r\nGO\r\n\r\n"));
+
+                sb.Append(string.Format("CREATE TABLE {0}(", auditTable.GetFormattedTableName()));
+
+                for (int i = 0; i < auditTable.Columns.Count; i++)
+                {
+                    if (auditTable.Columns[i].Identity == true) { auditTable.Columns[i].Identity = false; }
+
+                    sb.Append(string.Format("\r\n\t{0}\t{1}", (i == 0 ? "" : ","), auditTable.Columns[i].GetFormattedColumnName()));
+                }
+
+                List<ISqlTableColumnAttribute> pkeys = (from pk in auditTable.Columns where pk.PrimaryKey == true select pk).ToList();
+
+                if (pkeys.Count() > 0)
+                {
+                    sb.Append(string.Format("\r\n\t,\tCONSTRAINT [PK_Audit_{0}] PRIMARY KEY CLUSTERED", auditTable.Tablename));
+                    sb.Append("\r\n(");
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t{0}\t{1}", (i == 0 ? "" : ","), pkeys[i].ColumnName));
+                    }
+
+                    sb.Append("\r\n)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]");
+                    sb.Append("\r\n) ON [PRIMARY]");
+
+                }
+                else
+                {
+                    sb.Append("\r\n)");
+                }
+
+                sb.Append("\r\nGO\r\n\r\nSET ANSI_PADDING OFF\r\nGO");
+
+                foreach (var pky in auditTable.TableIndexes)
+                {
+                    string indexName = (string)pky.Key;
+                    List<AbstractSqlIndexAttribute> indexCols = (from idx in (List<AbstractSqlIndexAttribute>)pky.Value orderby idx.OrderOfPrecedence select idx).ToList();
+
+                    sb.Append(string.Format("\r\n\r\nCREATE NONCLUSTERED INDEX [{0}] ON {1}", indexName, auditTable.GetFormattedTableName()));
+                    sb.Append("\r\n(");
+
+                    for (int i = 0; i < indexCols.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t{0}\t{1}", (i == 0 ? "" : ","), indexCols[i].GetFormattedIndex()));
+                    }
+
+                    sb.Append("\r\n)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]");
+                    sb.Append("\r\nGO");
+
+                }
+
+            }
+
+            return sb.ToString();
+
+        }
+
+        /// <summary>
+        /// Creates an AFTER INSERT trigger on the transaction table
+        /// </summary>
+        /// <param name="auditTable">The ISqlTableAttribute object used to create the AFTER INSERT trigger</param>
+        /// <returns></returns>
+        protected virtual string CreateAfterInsertTrigger(ISqlTableAttribute auditTable)
+        {
+            StringBuilder sb = new StringBuilder("");
+
+            if ((this.CreateAuditTable && this.CreateTriggers) && (auditTable != null))
+            {
+                sb.Append(string.Format("\r\n\r\n\r\nCREATE TRIGGER [{0}].[{1}_AfterInsertTrigger] ON [{0}].[{1}]", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\nAFTER INSERT");
+                sb.Append("\r\n\r\nAS");
+                sb.Append("\r\nDECLARE @Date datetime = GetDate();");
+                sb.Append("\r\nDECLARE @TriggerType varchar(1) = 'I';");
+                sb.Append("\r\n\r\nBEGIN;");
+                sb.Append("\r\n\tSET NOCOUNT ON");
+                sb.Append(string.Format("\r\n\r\n\tINSERT INTO {0}", auditTable.GetFormattedTableName()));
+                sb.Append("\r\n\tSELECT\t@Date");
+                sb.Append("\r\n\t\t,\t@TriggerType");
+                sb.Append("\r\n\t\t,\t*");
+                sb.Append("\r\n\tFROM INSERTED;");
+                sb.Append("\r\n\r\n\tSET NOCOUNT OFF");
+                sb.Append("\r\nEND");
+                sb.Append("\r\nGO");
+            }
+
+            return sb.ToString();
+
+        }
+
+        /// <summary>
+        /// Creates an AFTER UPDATE trigger on the transaction table
+        /// </summary>
+        /// <param name="auditTable">The ISqlTableAttribute object used to create the AFTER UPDATE trigger</param>
+        /// <returns></returns>
+        protected virtual string CreateAfterUpdateTrigger(ISqlTableAttribute auditTable)
+        {
+            StringBuilder sb = new StringBuilder("");
+
+            if ((this.CreateAuditTable && this.CreateTriggers) && (auditTable != null))
+            {
+                sb.Append(string.Format("\r\n\r\n\r\nCREATE TRIGGER [{0}].[{1}_AfterUpdateTrigger] ON [{0}].[{1}]", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\nAFTER UPDATE");
+                sb.Append("\r\n\r\nAS");
+                sb.Append("\r\nDECLARE @Date datetime = GetDate();");
+                sb.Append("\r\nDECLARE @TriggerType varchar(1) = 'U';");
+                sb.Append("\r\n\r\nBEGIN");
+                sb.Append("\r\n\tSET NOCOUNT ON");
+                sb.Append(string.Format("\r\n\r\n\tINSERT INTO {0}", auditTable.GetFormattedTableName()));
+                sb.Append("\r\n\tSELECT\t@Date");
+                sb.Append("\r\n\t\t,\t@TriggerType");
+                sb.Append("\r\n\t\t,\t*");
+                sb.Append("\r\n\tFROM DELETED;");
+                sb.Append("\r\n\r\n\tSET NOCOUNT OFF");
+                sb.Append("\r\nEND");
+                sb.Append("\r\nGO");
+            }
+
+            return sb.ToString();
+
+        }
+
+        /// <summary>
+        /// Creates an AFTER DELETE trigger on the transaction table
+        /// </summary>
+        /// <param name="auditTable">The ISqlTableAttribute object used to create the AFTER DELETE trigger</param>
+        /// <returns></returns>
+        protected virtual string CreateAfterDeleteTrigger(ISqlTableAttribute auditTable)
+        {
+            StringBuilder sb = new StringBuilder("");
+
+            if ((this.CreateAuditTable && this.CreateTriggers) && (auditTable != null))
+            {
+                sb.Append(string.Format("\r\n\r\n\r\nCREATE TRIGGER [{0}].[{1}_AfterDeleteTrigger] ON [{0}].[{1}]", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\nAFTER DELETE");
+                sb.Append("\r\n\r\nAS");
+                sb.Append("\r\nDECLARE @Date datetime = GetDate();");
+                sb.Append("\r\nDECLARE @TriggerType varchar(1) = 'D';");
+                sb.Append("\r\n\r\nBEGIN");
+                sb.Append("\r\n\tSET NOCOUNT ON");
+                sb.Append(string.Format("\r\n\r\n\tINSERT INTO {0}", auditTable.GetFormattedTableName()));
+                sb.Append("\r\n\tSELECT\t@Date");
+                sb.Append("\r\n\t\t,\t@TriggerType");
+                sb.Append("\r\n\t\t,\t*");
+                sb.Append("\r\n\tFROM DELETED;");
+                sb.Append("\r\n\r\n\tSET NOCOUNT OFF");
+                sb.Append("\r\nEND");
+                sb.Append("\r\nGO");
+            }
+
+            return sb.ToString();
+
+        }
+
+        /// <summary>
+        /// Creates an INSTEAD OF DELETE trigger on the audit table to ensure nothing can accidently be deleted
+        /// </summary>
+        /// <param name="auditTable">The ISqlTableAttribute object used to create the INSTEAD OF DELETE trigger</param>
+        /// <returns></returns>
+        protected virtual string CreateBeforeAuditDeleteTrigger(ISqlTableAttribute auditTable)
+        {
+            StringBuilder sb = new StringBuilder("");
+
+            if ((this.CreateAuditTable && this.CreateTriggers) && (auditTable != null))
+            {
+                sb.Append(string.Format("\r\n\r\n\r\nCREATE TRIGGER [{0}].[{1}_BeforeDeleteTrigger] ON [{0}].[{1}]", auditTable.Schema, auditTable.Tablename));
+                sb.Append("\r\nINSTEAD OF DELETE");
+                sb.Append("\r\n\r\nAS");
+                sb.Append("\r\n\r\nBEGIN");
+                sb.Append("\r\n\tSET NOCOUNT ON");
+                sb.Append("\r\n\r\n\t/*");
+                sb.Append("\r\n\t\tDO NOTHING");
+                sb.Append("\r\n\r\n\t*/");
+                sb.Append("\r\n\r\n\tSET NOCOUNT OFF");
+                sb.Append("\r\nEND");
+                sb.Append("\r\nGO\r\n\r\n\r\n");
+            }
+
+            return sb.ToString();
+
+        }
+        #endregion
+
+    }
+
+    /// <summary>
+    /// Used for dynamically creating SQL Server Delete procedures
+    /// </summary>
+    public class SqlDeleteProcedureCommandString : ICommandString
+    {
+        
+        #region Local Variables
+        /// <summary>
+        /// Readonly ISqlTableAttribute instance member used for returning the command script
+        /// </summary>
+        protected readonly ISqlTableAttribute SqlTable;
+        #endregion
+
+        #region Constructor
+        /// <summary>
+        /// Creates a new instance of the SqlDeleteProcedureCommandString class
+        /// </summary>
+        /// <param name="sqlTable">The ISqlTableAttribute used for creating the command script</param>
+        public SqlDeleteProcedureCommandString(ISqlTableAttribute sqlTable)
+        {
+            this.SqlTable = sqlTable;
+        }
+        #endregion
+
+        #region Public Methods
+        /// <summary>
+        /// Returns a string containing the creation script for the deletion procedure
+        /// </summary>
+        /// <returns></returns>
+        public virtual string GetCommandString()
+        {
+            StringBuilder sb = new StringBuilder();
+
+            if (this.SqlTable != null)
+            {
+                sb.Append(string.Format("if EXISTS(SELECT * FROM sys.sysobjects WHERE id = OBJECT_ID(N'{0}.DeleteEntry_{1}') AND xtype IN ('P','PC'))", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n\tBEGIN");
+                sb.Append(string.Format("\r\n\t\tDROP PROCEDURE {0}.DeleteEntry_{1};", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n\tEND");
+                sb.Append("\r\nGO");
+
+                sb.Append(string.Format("\r\n\r\nCREATE PROCEDURE {0}.DeleteEntry_{1}(", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n");
+
+                List<ISqlTableColumnAttribute> pkeys = (from pk in this.SqlTable.Columns where pk.PrimaryKey == true select pk).ToList();
+
+                if (pkeys.Count() > 0)
+                {
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n{0}{1}", pkeys[i].GetStoredProcedureParameter(), (i == pkeys.Count - 1 ? "" : ",")));
+                    }
+
+                    sb.Append("\r\n\r\n)");
+                    sb.Append("\r\n\r\nAS");
+                    sb.Append("\r\n\r\nBEGIN");
+                    sb.Append(string.Format("\r\n\r\n\tDELETE FROM {0}", this.SqlTable.GetFormattedTableName()));
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t{0} {1} = @{1}", (i == 0 ? "WHERE" : "\tAND"), pkeys[i].ColumnName));
+                    }
+
+                    sb.Append("\r\nEND");
+                    sb.Append("\r\nGO\r\n\r\n");
+
+                }
+                else
+                {
+                    throw new InvalidOperationException("A primary key must be specified in order to create a delete procedure.");
+                }
+
+            }
+            else
+            {
+                throw new InvalidOperationException("The ISqlTableAttribute parameter passed in the constructor is invalid!");
+            }
+
+            return sb.ToString();
+
+        }
+        #endregion
+        
+    }
+
+    /// <summary>
+    /// Used for dynamically creating SQL Server Retrieve procedures
+    /// </summary>
+    public class SqlGetProcedureCommandString : ICommandString
+    {
+        
+        #region Local Variables
+        /// <summary>
+        /// Readonly ISqlTableAttribute instance member used for returning the command script
+        /// </summary>
+        protected readonly ISqlTableAttribute SqlTable;
+        #endregion
+
+        #region Constructor
+        /// <summary>
+        /// Creates a new instance of the SqlGetProcedureCommandString class
+        /// </summary>
+        /// <param name="sqlTable">The ISqlTableAttribute used for creating the command script</param>
+        public SqlGetProcedureCommandString(ISqlTableAttribute sqlTable)
+        {
+            this.SqlTable = sqlTable;
+        }
+        #endregion
+
+        #region Public Methods
+        /// <summary>
+        /// Returns a string containing the creation script for the retrieval procedure
+        /// </summary>
+        /// <returns></returns>
+        public virtual string GetCommandString()
+        {
+            StringBuilder sb = new StringBuilder();
+
+            if (this.SqlTable != null)
+            {
+                List<ISqlTableColumnAttribute> pkeys = (from pk in this.SqlTable.Columns where pk.PrimaryKey == true select pk).ToList();
+
+                if (pkeys.Count() > 0)
+                {
+                    sb.Append(string.Format("if EXISTS(SELECT * FROM sys.sysobjects WHERE id = OBJECT_ID(N'{0}.GetEntry_{1}') AND xtype IN ('P','PC'))", this.SqlTable.Schema, this.SqlTable.Tablename));
+                    sb.Append("\r\n\tBEGIN");
+                    sb.Append(string.Format("\r\n\t\tDROP PROCEDURE {0}.GetEntry_{1};", this.SqlTable.Schema, this.SqlTable.Tablename));
+                    sb.Append("\r\n\tEND");
+                    sb.Append("\r\nGO");
+
+                    sb.Append(string.Format("\r\n\r\nCREATE PROCEDURE {0}.GetEntry_{1}(", this.SqlTable.Schema, this.SqlTable.Tablename));
+                    sb.Append("\r\n");
+
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n{0}{1}", pkeys[i].GetStoredProcedureParameter(), (i == pkeys.Count - 1 ? "" : ",")));
+                    }
+
+                    sb.Append("\r\n\r\n)");
+                    sb.Append("\r\n\r\nAS");
+                    sb.Append("\r\n\r\nBEGIN");
+                    sb.Append(string.Format("\r\n\r\n\tSELECT *\r\n\tFROM {0}", this.SqlTable.GetFormattedTableName()));
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t{0} {1} = @{1}", (i == 0 ? "WHERE" : "\tAND"), pkeys[i].ColumnName));
+                    }
+
+                    sb.Append("\r\nEND");
+                    sb.Append("\r\nGO");
+
+                }
+
+                sb.Append(string.Format("\r\n\r\nif EXISTS(SELECT * FROM sys.sysobjects WHERE id = OBJECT_ID(N'{0}.GetAll_{1}') AND xtype IN ('P','PC'))", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n\tBEGIN");
+                sb.Append(string.Format("\r\n\t\tDROP PROCEDURE {0}.GetAll_{1};", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n\tEND");
+                sb.Append("\r\nGO");
+
+                sb.Append(string.Format("\r\n\r\nCREATE PROCEDURE {0}.GetAll_{1}", this.SqlTable.Schema, this.SqlTable.Tablename));
+                
+                sb.Append("\r\n\r\nAS");
+                sb.Append("\r\n\r\nBEGIN");
+                sb.Append(string.Format("\r\n\r\n\tSELECT *\r\n\tFROM {0}", this.SqlTable.GetFormattedTableName()));
+
+                sb.Append("\r\nEND");
+                sb.Append("\r\nGO\r\n\r\n");
+
+
+            }
+            else
+            {
+                throw new InvalidOperationException("The ISqlTableAttribute parameter passed in the constructor is invalid!");
+            }
+
+            return sb.ToString();
+
+        }
+        #endregion
+        
+    }
+
+    /// <summary>
+    /// Used for dynamically creating SQL Server Create and Update procedures
+    /// </summary>
+    public class SqlSaveProcedureCommandString : ICommandString
+    {
+        
+        #region Local Variables
+        /// <summary>
+        /// Readonly ISqlTableAttribute instance member used for returning the command script
+        /// </summary>
+        protected readonly ISqlTableAttribute SqlTable;
+        #endregion
+
+        #region Constructor
+        /// <summary>
+        /// Creates a new instance of the SqlSaveProcedureCommandString class
+        /// </summary>
+        /// <param name="sqlTable">The ISqlTableAttribute used for creating the command script</param>
+        public SqlSaveProcedureCommandString(ISqlTableAttribute sqlTable)
+        {
+            this.SqlTable = sqlTable;
+        }
+        #endregion
+
+        #region Public Methods
+        /// <summary>
+        /// Returns a string containing the creation script for the save procedure
+        /// </summary>
+        /// <returns></returns>
+        public virtual string GetCommandString()
+        {
+            StringBuilder sb = new StringBuilder();
+
+            if (this.SqlTable != null)
+            {
+                sb.Append(string.Format("if EXISTS(SELECT * FROM sys.sysobjects WHERE id = OBJECT_ID(N'{0}.SaveEntry_{1}') AND xtype IN ('P','PC'))", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n\tBEGIN");
+                sb.Append(string.Format("\r\n\t\tDROP PROCEDURE {0}.SaveEntry_{1};", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n\tEND");
+                sb.Append("\r\nGO");
+
+                sb.Append(string.Format("\r\n\r\nCREATE PROCEDURE {0}.SaveEntry_{1}(", this.SqlTable.Schema, this.SqlTable.Tablename));
+                sb.Append("\r\n");
+
+                List<ISqlTableColumnAttribute> pkeys = (from pk in this.SqlTable.Columns where pk.PrimaryKey == true select pk).ToList();
+                List<ISqlTableColumnAttribute> nokeys = (from nk in this.SqlTable.Columns where nk.PrimaryKey == false select nk).ToList();
+
+                if (pkeys.Count() > 0)
+                {
+
+                    for (int i = 0; i < this.SqlTable.Columns.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n{0}{1}", this.SqlTable.Columns[i].GetStoredProcedureParameter(), (i == this.SqlTable.Columns.Count - 1 ? "" : ",")));
+                    }
+
+                    sb.Append("\r\n\r\n)");
+                    sb.Append("\r\n\r\nAS");
+                    sb.Append("\r\n\r\nBEGIN");
+                    sb.Append(string.Format("\r\n\r\n\tif EXISTS(SELECT * FROM {0}", this.SqlTable.GetFormattedTableName()));
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("{0} {1} = @{1}", (i == 0 ? " WHERE" : " AND"), pkeys[i].ColumnName));
+                    }
+
+                    sb.Append(")");
+                    sb.Append("\r\n\t\tBEGIN");
+                    sb.Append(string.Format("\r\n\t\t\tUPDATE {0}", this.SqlTable.GetFormattedTableName()));
+                    sb.Append("\r\n\t\t\tSET");
+
+                    for (int i = 0; i < nokeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t\t\t\t{0}\t{1} = @{1}", (i == 0 ? "" : ","), nokeys[i].ColumnName));
+                    }
+
+                    for (int i = 0; i < pkeys.Count; i++)
+                    {
+                        sb.Append(string.Format("\r\n\t\t\t{0} {1} = @{1}", (i == 0 ? "WHERE" : "\tAND"), pkeys[i].ColumnName));
+                    }
+
+                    sb.Append(";");
+                    sb.Append("\r\n\t\tEND");
+
+                    sb.Append("\r\n\telse");
+                    sb.Append("\r\n\t\tBEGIN");
+                    sb.Append(string.Format("\r\n\t\t\tINSERT INTO {0} (", this.SqlTable.GetFormattedTableName()));
+
+                    int cnt = 0;
+
+                    foreach (SqlTableColumnAttribute col in this.SqlTable.Columns)
+                    {
+                        if (!col.Identity)
+                        {
+                            sb.Append(string.Format("{0}{1}", (cnt == 0 ? "" : ", "), col.ColumnName));
+                            cnt++;
+                        }
+                    }
+
+                    cnt = 0;
+                    sb.Append(")\r\n\t\t\tVALUES(");
+
+                    foreach (SqlTableColumnAttribute col in this.SqlTable.Columns)
+                    {
+                        if (!col.Identity)
+                        {
+                            sb.Append(string.Format("{0}@{1}", (cnt == 0 ? "" : ", "), col.ColumnName));
+                            cnt++;
+                        }
+                    }
+
+                    sb.Append(");\r\n\t\tEND");
+
+                    sb.Append("\r\nEND");
+                    sb.Append("\r\nGO\r\n\r\n");
+
+                }
+                else
+                {
+                    throw new InvalidOperationException("A primary key must be specified in order to create a delete procedure.");
+                }
+
+            }
+            else
+            {
+                throw new InvalidOperationException("The ISqlTableAttribute parameter passed in the constructor is invalid!");
+            }
+
+            return sb.ToString();
+
+        }
+        #endregion
+        
+    }
+
+    /// <summary>
+    /// Base class for all SqlObjectCommand classes
+    /// </summary>
+    public abstract class SqlObjectCommandBase<T> : ISqlObjectCommand<T>
+    {
+
+        #region Local Variables
+        /// <summary>
+        /// The connection string used when creating the SQL object
+        /// </summary>
+        protected System.Data.SqlClient.SqlConnection sqlConnection;
+
+        private ICommandString _CommandString;
+        private string _ConnectionString;
+        #endregion
+
+        #region Constructor
+        /// <summary>
+        /// Creates a new instance of ISQlObjectCommand
+        /// </summary>
+        /// <param name="commandString"></param>
+        /// <param name="connectionString"></param>
+        public SqlObjectCommandBase(ICommandString commandString, string connectionString)
+        {
+            this._CommandString = commandString;
+            this._ConnectionString = connectionString;
+            this.sqlConnection = new System.Data.SqlClient.SqlConnection(this._ConnectionString);
+        }
+
+        /// <summary>
+        /// Destroys the instance of the SqlObjectCommandBase class
+        /// </summary>
+        ~SqlObjectCommandBase()
+        {
+            this.Dispose(false);
+        }
+        #endregion
+
+        #region Properties
+        /// <summary>
+        /// Gets the ICommandString to execute
+        /// </summary>
+        public ICommandString CommandString
+        {
+            get { return this._CommandString; }
+            set { this._CommandString = value; }
+        }
+
+        /// <summary>
+        /// Gets the connection string used when creating the SQL Object
+        /// </summary>
+        public virtual string ConnectionString
+        {
+            get { return this._ConnectionString; }
+            set
+            {
+                this._ConnectionString = value;
+                this.sqlConnection = new System.Data.SqlClient.SqlConnection(this._ConnectionString);
+            }
+        }
+
+        /// <summary>
+        /// Gets the server name
+        /// </summary>
+        public string Server
+        {
+            get { return this.sqlConnection.DataSource; }
+        }
+
+        /// <summary>
+        /// Gets the database name
+        /// </summary>
+        public string Database
+        {
+            get { return this.sqlConnection.Database; }
+        }
+
+        /// <summary>
+        /// Gets the connection timeout
+        /// </summary>
+        public int ConnectionTimeout
+        {
+            get { return this.sqlConnection.ConnectionTimeout; }
+        }
+
+        /// <summary>
+        /// Gets the System.Data.SqlClient.SqlCredential used to make the connection
+        /// </summary>
+        public System.Data.SqlClient.SqlCredential Credential
+        {
+            get { return this.sqlConnection.Credential; }
+        }
+        #endregion
+
+        #region Public Methods
+        /// <summary>
+        /// Executes the command
+        /// </summary>
+        public abstract T ExecuteCommand();
+
+        /// <summary>
+        /// Disposes of the SqlConnection object
+        /// </summary>
+        public void Dispose()
+        {
+            this.Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+        #endregion
+
+        #region Protected Methods
+        protected virtual void Dispose(bool disposing)
+        {
+
+            if (disposing)
+            {
+                if (this.sqlConnection != null) { this.sqlConnection.Dispose(); }
+            }
+
+        }
+        #endregion
+
+    }
+
+    /// <summary>
+    /// Used for creating SQL Object(s)
+    /// </summary>
+    public class SqlObjectCreationCommand : SqlObjectCommandBase<bool>
+    {
+
+        #region Constructor
+        /// <summary>
+        /// Creates a new instance of SqlObjectCreationCommand
+        /// </summary>
+        /// <param name="commandString">The ICommandString to execute</param>
+        /// <param name="connectionString">The connection to use when creating the SQL Object(s)</param>
+        public SqlObjectCreationCommand(ICommandString commandString, string connectionString)
+            : base(commandString, connectionString)
+        {
+
+        }
+        #endregion
+
+        #region Public Methods
+        /// <summary>
+        /// Executes the command that creates the SQL Object(s)
+        /// </summary>
+        /// <returns></returns>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2100:Review SQL queries for security vulnerabilities")]
+        public override bool ExecuteCommand()
+        {
+            bool result = false;
+            
+            try
+            {
+                
+                if (this.sqlConnection != null)
+                {
+
+                    if (this.sqlConnection.State == System.Data.ConnectionState.Closed)
+                    {
+                        this.sqlConnection.Open();
+                    }
+                    
+                    string[] commands = this.CommandString.GetCommandString().Trim(new char[] { '\r', '\n' }).Split(new string[] { "GO" }, StringSplitOptions.RemoveEmptyEntries);
+
+                    System.Data.SqlClient.SqlCommand cmd = new System.Data.SqlClient.SqlCommand()
+                    {
+                        Connection = this.sqlConnection,
+                        CommandType = System.Data.CommandType.Text,
+                        CommandTimeout = this.ConnectionTimeout
+                    };
+
+                    foreach (string command in commands)
+                    {
+                        cmd.CommandText = command.Trim(new char[] { '\r', '\n' });
+                        cmd.ExecuteNonQuery();
+                    }
+                    
+                    result = true;
+
+                }
+                
+            }
+            catch (Exception e)
+            {
+                result = false;
+            }
+
+            return result;
+
+        }
+        #endregion
+
+    }
+
+}

@@ -23,7 +23,6 @@ using System;
 using System.Data;
 using System.Security.Cryptography;
 using System.Collections.Generic;
-using System.Linq.Expressions;
 using System.Text;
 using Krodzone.Attributes;
 using Krodzone.SQL;
@@ -32,6 +31,8 @@ using Krodzone.Validation;
 using System.Reflection;
 using Krodzone.Validation.Attributes;
 using System.Linq;
+using System.Xml.Serialization;
+using System.IO.Compression;
 
 namespace Krodzone
 {
@@ -1255,6 +1256,200 @@ namespace Krodzone
             return obj;
 
         }
+
+        /// <summary>
+        /// Creates a Zip Archive from the supplied array of files
+        /// </summary>
+        /// <param name="archiveFile">The complete path of the zip file to create or update</param>
+        /// <param name="filesToArchive">The array of files to be added to the archive</param>
+        /// <param name="archiveMode">The archive mode determines how existing files are handled. If not set to Update, and the archive already exists, the existing archive is first deleted.</param>
+        public static void CreateArchive(string archiveFile, string[] filesToArchive, ZipArchiveMode archiveMode = ZipArchiveMode.Update)
+        {
+
+            if (System.IO.File.Exists(archiveFile) && archiveMode != ZipArchiveMode.Update)
+            {
+                archiveMode = ZipArchiveMode.Create;
+                System.IO.File.Delete(archiveFile);
+            }
+
+            using (ZipArchive zipProvider = ZipFile.Open(archiveFile, archiveMode))
+            {
+
+                foreach (string file in filesToArchive)
+                {
+                    if (System.IO.File.Exists(file))
+                    {
+                        string name = System.IO.Path.GetFileName(file);
+                        ZipArchiveEntry entry = zipProvider.CreateEntry(name);
+
+                        using (System.IO.BinaryWriter writer = new System.IO.BinaryWriter(entry.Open()))
+                        {
+                            writer.Write(System.IO.File.ReadAllBytes(file));
+                        }
+
+                    }
+                }
+
+            }
+
+        }
+
+        /// <summary>
+        /// Creates a Zip Archive from the supplied List of ArchiveFile
+        /// </summary>
+        /// <param name="archiveFile">The complete path of the zip file to create or update</param>
+        /// <param name="filesToArchive">The List of ArchiveFile containing the file data to be added to the archive</param>
+        /// <param name="archiveMode">The archive mode determines how existing files are handled. If not set to Update, and the archive already exists, the existing archive is first deleted.</param>
+        public static void CreateArchive(string archiveFile, List<ArchiveFile> filesToArchive, ZipArchiveMode archiveMode = ZipArchiveMode.Update)
+        {
+
+            if (System.IO.File.Exists(archiveFile) && archiveMode != ZipArchiveMode.Update)
+            {
+                archiveMode = ZipArchiveMode.Create;
+                System.IO.File.Delete(archiveFile);
+            }
+
+            using (ZipArchive zipProvider = ZipFile.Open(archiveFile, archiveMode))
+            {
+
+                foreach (ArchiveFile file in filesToArchive)
+                {
+
+                    if (file != null & file.FileData != null && !string.IsNullOrEmpty(file.FileName))
+                    {
+                        ZipArchiveEntry entry = zipProvider.CreateEntry(file.FileName);
+
+                        using (System.IO.BinaryWriter writer = new System.IO.BinaryWriter(entry.Open()))
+                        {
+                            writer.Write(file.FileData);
+                        }
+
+                    }
+
+                }
+
+            }
+
+        }
+
+        /// <summary>
+        /// Retrieves files in a Zip Archive
+        /// </summary>
+        /// <param name="archiveFile"></param>
+        /// <returns></returns>
+        public static IList<ArchiveFile> GetArchivedFiles(string archiveFile)
+        {
+            IList<ArchiveFile> files = null;
+            int BUFFER_SIZE = 4096;
+
+            if (System.IO.File.Exists(archiveFile))
+            {
+                files = new List<ArchiveFile>();
+
+                using (ZipArchive zipProvider = ZipFile.Open(archiveFile, ZipArchiveMode.Read))
+                {
+
+                    foreach (ZipArchiveEntry entry in zipProvider.Entries)
+                    {
+                        ArchiveFile file = new ArchiveFile() { FileName = entry.Name };
+
+                        using (System.IO.Stream str = entry.Open())
+                        {
+                            using (System.IO.MemoryStream ms = new System.IO.MemoryStream())
+                            {
+                                byte[] bufferData = new byte[BUFFER_SIZE];
+                                int bytesRead = str.Read(bufferData, 0, BUFFER_SIZE);
+
+                                while (bytesRead > 0)
+                                {
+                                    ms.Write(bufferData, 0, bytesRead);
+                                    bytesRead = str.Read(bufferData, 0, BUFFER_SIZE);
+                                }
+
+                                file.FileData = ms.ToArray();
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            }
+
+            return files;
+
+        }
+
+        /// <summary>
+        /// Serializes a list of objects implementing the ICommonObject interface, and that has a parameterless constructor, to an XML string.
+        /// </summary>
+        /// <typeparam name="T">The Type to be serialized.</typeparam>
+        /// <param name="items">The list of items to serialize.</param>
+        /// <param name="exception">The exception thrown should one occur. Set to null if no exception is thrown.</param>
+        /// <returns>An XML string representing the list of objects serialized.</returns>
+        public static string SerializeXML<T>(List<T> items, out Exception exception) where T : ICommonObject, new()
+        {
+            exception = null;
+
+            if (items == null || items.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            string serializedList = "";
+            XmlSerializer serializer = new XmlSerializer(typeof(List<T>));
+
+            try
+            {
+                System.IO.StringWriter writer = new System.IO.StringWriter();
+                serializer.Serialize(writer, items);
+                serializedList = writer.ToString();
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+                serializedList = string.Empty;
+            }
+
+            return serializedList;
+
+        }
+
+        /// <summary>
+        /// Deserializes an XML file containing a list of XML serialized objects implementing the ICommonObject interface, that has a parameterless constructor.
+        /// </summary>
+        /// <typeparam name="T">The Type to be serialized.</typeparam>
+        /// <param name="path">The path to file to be deserialized.</param>
+        /// <param name="exception">The exception thrown should one occur. Set to null if no exception is thrown.</param>
+        /// <returns>Returns a list of deserialized objects.</returns>
+        public static List<T> LoadSerializedXML<T>(string path, out Exception exception)
+        {
+            exception = null;
+
+            if (!System.IO.File.Exists(path))
+            {
+                return null;
+            }
+
+            List<T> items = new List<T>();
+            XmlSerializer serializer = new XmlSerializer(typeof(List<T>));
+
+            try
+            {
+                System.IO.StreamReader reader = new System.IO.StreamReader(path);
+                items = serializer.Deserialize(reader) as List<T>;
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+                items = new List<T>();
+            }
+
+            return items;
+
+        }
         #endregion
 
         #region Nested Objects
@@ -1615,6 +1810,20 @@ namespace Krodzone
             return Encoding.ASCII.GetString(results);
 
     }
+        #endregion
+
+    }
+
+    public class ArchiveFile
+    {
+
+        #region Constructor
+        public ArchiveFile() { }
+        #endregion
+
+        #region Properties
+        public string FileName { get; set; }
+        public byte[] FileData { get; set; }
         #endregion
 
     }
